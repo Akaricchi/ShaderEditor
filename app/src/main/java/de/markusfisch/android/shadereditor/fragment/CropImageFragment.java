@@ -142,7 +142,7 @@ public class CropImageFragment extends Fragment {
 				return BitmapEditor.getBitmapFromUri(
 						activity,
 						imageUri,
-						1024);
+						2048);
 			}
 
 			@Override

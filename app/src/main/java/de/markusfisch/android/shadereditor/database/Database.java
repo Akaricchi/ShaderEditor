@@ -2,9 +2,12 @@ package de.markusfisch.android.shadereditor.database;
 
 import de.markusfisch.android.shadereditor.R;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.database.Cursor;
@@ -12,14 +15,28 @@ import android.database.SQLException;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
 import android.os.AsyncTask;
+import android.os.Environment;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.widget.Toast;
 
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Formatter;
+
+import static android.Manifest.permission.READ_EXTERNAL_STORAGE;
+import static android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION;
 
 public class Database {
 	public static final String SHADERS = "shaders";
@@ -38,9 +55,13 @@ public class Database {
 	public static final String TEXTURES_HEIGHT = "height";
 	public static final String TEXTURES_RATIO = "ratio";
 	public static final String TEXTURES_THUMB = "thumb";
-	public static final String TEXTURES_MATRIX = "matrix";
+	// public static final String TEXTURES_MATRIX = "matrix";
+	public static final String TEXTURES_HASH = "hash";
+
+	public static final String TEXTURES_DIRECTORY = "textures";
 
 	private SQLiteDatabase db;
+	private Context dbContext;
 	private int textureThumbnailSize;
 
 	// the parent instance of this AsyncTask will never be
@@ -51,6 +72,7 @@ public class Database {
 				context.getResources().getDisplayMetrics().density * 48f);
 
 		final OpenHelper helper = new OpenHelper(context);
+		dbContext = context;
 
 		new AsyncTask<Void, Void, Boolean>() {
 			@Override
@@ -217,7 +239,7 @@ public class Database {
 						TEXTURES_NAME + "," +
 						TEXTURES_WIDTH + "," +
 						TEXTURES_HEIGHT + "," +
-						TEXTURES_MATRIX +
+						TEXTURES_HASH +
 						" FROM " + TEXTURES +
 						" WHERE " + TEXTURES_ID + " = ?",
 				new String[]{String.valueOf(id)});
@@ -226,7 +248,7 @@ public class Database {
 	public Bitmap getTextureBitmap(String name) {
 		Cursor cursor = db.rawQuery(
 				"SELECT " +
-						TEXTURES_MATRIX +
+						TEXTURES_HASH +
 						" FROM " + TEXTURES +
 						" WHERE " + TEXTURES_NAME + " = ?",
 				new String[]{name});
@@ -239,7 +261,16 @@ public class Database {
 		if (closeIfEmpty(cursor)) {
 			return null;
 		}
-		return textureFromCursor(cursor);
+
+		try {
+			return textureFromCursor(cursor, dbContext);
+		} catch(IOException e) {
+			Toast.makeText(
+					dbContext,
+					R.string.cannot_load_texture,
+					Toast.LENGTH_LONG).show();
+			return null;
+		}
 	}
 
 	public static long insertShader(
@@ -303,11 +334,12 @@ public class Database {
 		}
 	}
 
-	public static long insertTexture(
+	private static long insertTexture(
 			SQLiteDatabase db,
 			String name,
 			Bitmap bitmap,
-			int thumbnailSize) {
+			int thumbnailSize,
+			Context context) {
 		Bitmap thumbnail;
 
 		try {
@@ -329,7 +361,27 @@ public class Database {
 		cv.put(TEXTURES_HEIGHT, h);
 		cv.put(TEXTURES_RATIO, calculateRatio(w, h));
 		cv.put(TEXTURES_THUMB, bitmapToPng(thumbnail));
-		cv.put(TEXTURES_MATRIX, bitmapToPng(bitmap));
+
+		String hash;
+
+		try {
+			byte[] data = bitmapToPng(bitmap);
+			hash = hashBlob(data);
+			File file = getTextureFile(hash, context);
+			BufferedOutputStream buf = new BufferedOutputStream(new FileOutputStream(file));
+			buf.write(data);
+			buf.close();
+		} catch(IOException e) {
+			e.printStackTrace();
+			Toast.makeText(
+					context,
+					R.string.cannot_store_texture,
+					Toast.LENGTH_LONG).show();
+
+			return 0;
+		}
+
+		cv.put(TEXTURES_HASH, hash);
 
 		return db.insert(TEXTURES, null, cv);
 	}
@@ -339,7 +391,8 @@ public class Database {
 				db,
 				name,
 				bitmap,
-				textureThumbnailSize);
+				textureThumbnailSize,
+				dbContext);
 	}
 
 	public void updateShader(
@@ -393,9 +446,15 @@ public class Database {
 				Locale.US).format(new Date());
 	}
 
-	private static Bitmap textureFromCursor(Cursor cursor) {
-		byte data[] = cursor.getBlob(cursor.getColumnIndex(
-				TEXTURES_MATRIX));
+	private static Bitmap textureFromCursor(Cursor cursor, Context context) throws IOException {
+		String hash = cursor.getString(cursor.getColumnIndex(TEXTURES_HASH));
+		File file = getTextureFile(hash, context);
+		byte[] data = new byte[(int)file.length()];
+
+		BufferedInputStream buf = new BufferedInputStream(new FileInputStream(file));
+		buf.read(data, 0, data.length);
+		buf.close();
+
 		return BitmapFactory.decodeByteArray(data, 0, data.length);
 	}
 
@@ -431,6 +490,62 @@ public class Database {
 		// round to two decimal places to avoid problems with
 		// rounding errors; the query will filter precisely 1 or 1.5
 		return Math.round(((float) height / width) * 100f) / 100f;
+	}
+
+	private static String hashBlob(final byte[] blob) {
+		byte[] hash;
+
+		try {
+			hash = MessageDigest.getInstance("SHA-1").digest(blob);
+		} catch(NoSuchAlgorithmException e) {
+			// no idea how to deal with this; not happening anyway.
+			e.printStackTrace();
+			return null;
+		}
+
+		Formatter formatter = new Formatter();
+
+		for (byte b : hash) {
+			formatter.format("%02x", b);
+		}
+
+		return formatter.toString();
+	}
+
+	private static void requestReadPermission(Context context) {
+		String permission = Manifest.permission.READ_EXTERNAL_STORAGE;
+		if (ContextCompat.checkSelfPermission(context, permission) !=
+				PackageManager.PERMISSION_GRANTED) {
+			Activity activity;
+			try {
+				activity = (Activity) context;
+			} catch (ClassCastException e) {
+				return;
+			}
+			ActivityCompat.requestPermissions(
+					activity,
+					new String[]{permission},
+					1);
+		}
+	}
+
+	private static File getTexturesDirectory(Context context) throws IOException {
+		requestReadPermission(context);
+
+		File dir = context.getExternalFilesDir(null);
+		dir = new File(dir, TEXTURES_DIRECTORY);
+		dir.mkdirs();
+
+		if (!dir.isDirectory()) {
+			throw new IOException(context.getString(
+					R.string.path_is_no_directory, dir));
+		}
+
+		return dir;
+	}
+
+	private static File getTextureFile(final String hash, Context context) throws IOException {
+		return new File(getTexturesDirectory(context), String.format("%s.png", hash));
 	}
 
 	private void createShadersTable(SQLiteDatabase db, Context context) {
@@ -481,12 +596,12 @@ public class Database {
 				TEXTURES_HEIGHT + " INTEGER," +
 				TEXTURES_RATIO + " REAL," +
 				TEXTURES_THUMB + " BLOB," +
-				TEXTURES_MATRIX + " BLOB );");
+				TEXTURES_HASH + " TEXT);");
 
 		insertInitalTextures(db, context);
 	}
 
-	private static void addTexturesWidthHeightRatio(SQLiteDatabase db) {
+	private static void addTexturesWidthHeightRatio(SQLiteDatabase db, Context context) {
 		db.execSQL("ALTER TABLE " + TEXTURES +
 				" ADD COLUMN " + TEXTURES_WIDTH + " INTEGER;");
 		db.execSQL("ALTER TABLE " + TEXTURES +
@@ -497,7 +612,7 @@ public class Database {
 		Cursor cursor = db.rawQuery(
 				"SELECT " +
 						TEXTURES_ID + "," +
-						TEXTURES_MATRIX +
+						TEXTURES_HASH +
 						" FROM " + TEXTURES,
 				null);
 
@@ -506,7 +621,13 @@ public class Database {
 		}
 
 		do {
-			Bitmap bm = textureFromCursor(cursor);
+			Bitmap bm;
+
+			try {
+				bm = textureFromCursor(cursor, context);
+			} catch(IOException e) {
+				continue;
+			}
 
 			if (bm == null) {
 				continue;
@@ -542,7 +663,8 @@ public class Database {
 				BitmapFactory.decodeResource(
 						context.getResources(),
 						R.drawable.texture_noise),
-				textureThumbnailSize);
+				textureThumbnailSize,
+				dbContext);
 	}
 
 	private class OpenHelper extends SQLiteOpenHelper {
@@ -578,7 +700,7 @@ public class Database {
 			}
 
 			if (oldVersion < 4) {
-				addTexturesWidthHeightRatio(db);
+				addTexturesWidthHeightRatio(db, context);
 			}
 
 			if (oldVersion < 5) {

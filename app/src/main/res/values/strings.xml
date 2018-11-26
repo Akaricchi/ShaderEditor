@@ -1,6 +1,8 @@
 <resources>
 	<string name="app_name">Shader Editor</string>
 	<string name="cannot_open_database">Cannot open database!</string>
+	<string name="cannot_store_texture">Cannot store texture!</string>
+	<string name="cannot_load_texture">Cannot load texture!</string>
 
 	<!-- MainActivity -->
 	<string name="drawer_open">Open drawer</string>

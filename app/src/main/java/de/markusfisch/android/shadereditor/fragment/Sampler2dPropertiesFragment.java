@@ -82,7 +82,7 @@ public class Sampler2dPropertiesFragment extends AbstractSamplerPropertiesFragme
 						imageUri,
 						// which doesn't work for some devices;
 						// 2048 is too much => out of memory
-						1024),
+						2048),
 				cropRect,
 				imageRotation,
 				name,
