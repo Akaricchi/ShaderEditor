@@ -23,6 +23,7 @@ import android.hardware.Camera;
 import android.hardware.SensorManager;
 import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
+import android.opengl.GLES32;
 import android.opengl.GLSurfaceView;
 import android.opengl.GLUtils;
 import android.os.BatteryManager;
@@ -1101,12 +1102,12 @@ public class ShaderRenderer implements GLSurfaceView.Renderer {
 			GLES20.glTexImage2D(
 					GLES20.GL_TEXTURE_2D,
 					0,
-					GLES20.GL_RGBA,
+					GLES32.GL_RGBA16F,
 					width,
 					height,
 					0,
 					GLES20.GL_RGBA,
-					GLES20.GL_UNSIGNED_BYTE,
+					GLES32.GL_HALF_FLOAT,
 					null);
 		}
 
